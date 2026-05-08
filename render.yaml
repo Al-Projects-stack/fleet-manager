@@ -1,0 +1,44 @@
+services:
+  # ── Backend API ──────────────────────────────────────────────────────────────
+  - type: web
+    name: fleet-backend
+    runtime: node
+    buildCommand: cd backend && npm ci && npm run build
+    startCommand: cd backend && node dist/index.js
+    plan: free
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MONGODB_URI
+        sync: false   # paste your MongoDB Atlas connection string here after deploy
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 7d
+      - key: JWT_COOKIE_EXPIRES_DAYS
+        value: "7"
+      - key: CORS_ORIGIN
+        sync: false   # set to fleet-frontend URL after it deploys
+      - key: AI_SERVICE_URL
+        sync: false   # set to fleet-ai-service URL after it deploys
+
+  # ── AI / Statistical Engine ──────────────────────────────────────────────────
+  - type: web
+    name: fleet-ai-service
+    runtime: node
+    buildCommand: cd ai-service && npm ci && npm run build
+    startCommand: cd ai-service && node dist/index.js
+    plan: free
+    envVars:
+      - key: NODE_ENV
+        value: production
+
+  # ── Frontend (static) ────────────────────────────────────────────────────────
+  - type: web
+    name: fleet-frontend
+    runtime: static
+    buildCommand: cd frontend && npm ci && npm run build
+    staticPublishPath: ./frontend/dist
+    envVars:
+      - key: VITE_API_BASE_URL
+        sync: false   # set to fleet-backend URL + /api/v1 after backend deploys

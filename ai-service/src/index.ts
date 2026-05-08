@@ -4,7 +4,7 @@ import helmet from 'helmet';
 import { fuelAnomalyRouter } from './analyzers/fuelAnomaly';
 import { maintenancePredictRouter } from './analyzers/maintenancePredict';
 
-const PORT = parseInt(process.env.AI_SERVICE_PORT ?? '3002', 10);
+const PORT = parseInt(process.env.PORT ?? process.env.AI_SERVICE_PORT ?? '3002', 10);
 
 const app = express();
 
