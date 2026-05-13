@@ -3,7 +3,7 @@ services:
   - type: web
     name: fleet-backend
     runtime: node
-    buildCommand: cd backend && NODE_ENV=development npm ci && npm run build
+    buildCommand: cd backend && npm ci && npm run build
     startCommand: cd backend && node dist/index.js
     plan: free
     healthCheckPath: /health

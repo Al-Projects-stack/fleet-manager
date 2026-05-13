@@ -52,7 +52,7 @@ export function errorHandler(
   // Mongoose schema validation errors → 400
   if (err instanceof mongoose.Error.ValidationError) {
     const message = Object.values(err.errors)
-      .map((e) => (e as Error).message)
+      .map((e) => (e as unknown as Error).message)
       .join(', ');
     res.status(400).json({ success: false, error: message });
     return;
