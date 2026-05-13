@@ -94,7 +94,7 @@ const alertSchema = new Schema<IAlertDocument>(
     timestamps: true,
     toJSON: {
       transform(_doc, ret) {
-        delete ret.__v;
+        delete (ret as Record<string, unknown>).__v;
         return ret;
       },
     },

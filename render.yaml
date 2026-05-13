@@ -3,7 +3,7 @@ services:
   - type: web
     name: fleet-backend
     runtime: node
-    buildCommand: cd backend && npm ci && npm run build
+    buildCommand: cd backend && npm ci --include=dev && npm run build
     startCommand: cd backend && node dist/index.js
     plan: free
     healthCheckPath: /health
@@ -33,7 +33,7 @@ services:
   - type: web
     name: fleet-ai-service
     runtime: node
-    buildCommand: cd ai-service && npm ci && npm run build
+    buildCommand: cd ai-service && npm ci --include=dev && npm run build
     startCommand: cd ai-service && node dist/index.js
     plan: free
     healthCheckPath: /health

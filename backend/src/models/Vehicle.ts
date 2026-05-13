@@ -20,7 +20,7 @@ export interface IVehicle {
   notes: string;
 }
 
-export interface IVehicleDocument extends IVehicle, Document {
+export interface IVehicleDocument extends IVehicle, Omit<Document, 'model'> {
   createdAt: Date;
   updatedAt: Date;
 }
@@ -110,7 +110,7 @@ const vehicleSchema = new Schema<IVehicleDocument>(
     timestamps: true,
     toJSON: {
       transform(_doc, ret) {
-        delete ret.__v;
+        delete (ret as Record<string, unknown>).__v;
         return ret;
       },
     },
