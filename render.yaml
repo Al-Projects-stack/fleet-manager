@@ -6,11 +6,12 @@ services:
     buildCommand: cd backend && npm ci && npm run build
     startCommand: cd backend && node dist/index.js
     plan: free
+    healthCheckPath: /health
     envVars:
       - key: NODE_ENV
         value: production
       - key: MONGODB_URI
-        sync: false   # paste your MongoDB Atlas connection string here after deploy
+        sync: false   # paste your MongoDB Atlas connection string in Render dashboard
       - key: JWT_SECRET
         generateValue: true
       - key: JWT_EXPIRES_IN
@@ -18,9 +19,15 @@ services:
       - key: JWT_COOKIE_EXPIRES_DAYS
         value: "7"
       - key: CORS_ORIGIN
-        sync: false   # set to fleet-frontend URL after it deploys
+        fromService:
+          name: fleet-frontend
+          type: web
+          property: origin
       - key: AI_SERVICE_URL
-        sync: false   # set to fleet-ai-service URL after it deploys
+        fromService:
+          name: fleet-ai-service
+          type: web
+          property: origin
 
   # ── AI / Statistical Engine ──────────────────────────────────────────────────
   - type: web
@@ -29,6 +36,7 @@ services:
     buildCommand: cd ai-service && npm ci && npm run build
     startCommand: cd ai-service && node dist/index.js
     plan: free
+    healthCheckPath: /health
     envVars:
       - key: NODE_ENV
         value: production
@@ -39,6 +47,10 @@ services:
     runtime: static
     buildCommand: cd frontend && npm ci && npm run build
     staticPublishPath: ./frontend/dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
     envVars:
       - key: VITE_API_BASE_URL
         sync: false   # set to fleet-backend URL + /api/v1 after backend deploys
