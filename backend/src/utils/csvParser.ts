@@ -23,7 +23,7 @@ export function parseTelemetryCSV(csvText: string): TelemetryCSVRow[] {
   const result = Papa.parse<TelemetryCSVRow>(csvText, {
     header: true,
     skipEmptyLines: true,
-    transformHeader: (h) => h.trim(),
+    transformHeader: (h: string) => h.trim(),
   });
 
   if (result.errors.length > 0) {
