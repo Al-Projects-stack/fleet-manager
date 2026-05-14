@@ -1,5 +1,5 @@
 import { ReactNode } from 'react';
-import type { AlertSeverity, VehicleStatus, WorkOrderStatus, WorkOrderPriority } from '../../types/api';
+import type { AlertSeverity, VehicleStatus, WorkOrderPriority } from '../../types/api';
 
 export type BadgeVariant =
   | 'success'

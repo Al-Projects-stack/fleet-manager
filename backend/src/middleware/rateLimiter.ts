@@ -11,12 +11,12 @@ export const globalRateLimiter = rateLimit({
 
 // Tighter window for auth endpoints to blunt brute-force attempts
 export const authRateLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
+  windowMs: 12 * 60 * 1000,
   max: 20,
   standardHeaders: true,
   legacyHeaders: false,
   message: {
     success: false,
-    error: 'Too many authentication attempts — please try again in 15 minutes',
+    error: 'Too many authentication attempts — please try again in 12 minutes',
   },
 });
