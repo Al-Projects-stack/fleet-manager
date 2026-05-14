@@ -1,10 +1,11 @@
-# FleetManager — AI-Powered Fleet Maintenance & Fuel Optimization
+# FleetIQ 
+AI-Powered Fleet Maintenance & Fuel Optimization
 
 A full-stack MVP for managing commercial vehicle fleets with real-time telematics ingestion, rule-based predictive alerts, fuel anomaly detection, and a complete work order workflow.
 
 **Live demo:** https://fleet-frontend-kqhi.onrender.com
 
-> Register a new account from the landing page to try it — no invite needed.
+> Register a new account from the landing page to try itno invite.
 
 ---
 
