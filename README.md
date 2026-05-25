@@ -44,10 +44,10 @@ A full-stack MVP for managing commercial vehicle fleets with real-time telematic
 - All readings stored in a native MongoDB time-series collection with 90-day TTL
 
 ### Predictive Alerts
-- **Low fuel** — triggers below 15%, critical below 5%
-- **Engine temperature** — triggers above 105°C, critical above 115°C
-- **Maintenance due** — triggers within 500 km of scheduled interval
-- **Fuel anomaly** — rolling z-score detects consumption spikes vs recent history
+- **Low fuel** triggers below 15%, critical below 5%
+- **Engine temperature** triggers above 105°C, critical above 115°C
+- **Maintenance due** triggers within 500 km of scheduled interval
+- **Fuel anomaly** rolling z-score detects consumption spikes vs recent history
 - Deduplication: only one unresolved alert per type per vehicle at a time
 - Resolve alerts and optionally link to a work order
 
@@ -66,19 +66,19 @@ A full-stack MVP for managing commercial vehicle fleets with real-time telematic
 ### Auth & RBAC
 | Role | Capabilities |
 |---|---|
-| Admin | Full access — all CRUD, delete vehicles, manage all work orders |
+| Admin | Full access all CRUD, delete vehicles, manage all work orders |
 | Manager | Create and update vehicles, work orders, and alerts |
 | Technician | Update work order status, add notes, resolve alerts |
-| ReadOnly | View only — no mutations |
+| ReadOnly | View only no mutations |
 
 ---
 
 ## Project Structure
 
 ```
-├── backend/          Express API — routes, controllers, validators, services
-├── frontend/         React SPA — pages, hooks, components, stores
-├── ai-service/       Node.js statistical engine — fuel anomaly & maintenance prediction
+├── backend/          Express API routes, controllers, validators, services
+├── frontend/         React SPA pages, hooks, components, stores
+├── ai-service/       Node.js statistical engine fuel anomaly & maintenance prediction
 ├── docker/           Dockerfiles for all three services
 ├── .github/          GitHub Actions CI workflow
 ├── docker-compose.yml
@@ -97,7 +97,7 @@ A full-stack MVP for managing commercial vehicle fleets with real-time telematic
 
 ```bash
 cp .env.example .env
-# Edit .env — set JWT_SECRET (32+ chars) and MONGODB_URI
+# Edit .env set JWT_SECRET (32+ chars) and MONGODB_URI
 ```
 
 ### 2. Install and run each service
@@ -189,8 +189,8 @@ Runs 9 integration tests across auth and vehicle endpoints against a real MongoD
 | Variable | Description | Default |
 |---|---|---|
 | `PORT` | Backend port | `3001` |
-| `MONGODB_URI` | MongoDB connection string | — |
-| `JWT_SECRET` | Min 32 characters | — |
+| `MONGODB_URI` | MongoDB connection string | |
+| `JWT_SECRET` | Min 32 characters | |
 | `JWT_EXPIRES_IN` | Token expiry | `7d` |
 | `CORS_ORIGIN` | Frontend origin | `http://localhost:5173` |
 | `AI_SERVICE_URL` | AI engine URL | `http://ai-service:3002` |
