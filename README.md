@@ -201,3 +201,9 @@ Runs 9 integration tests across auth and vehicle endpoints against a real MongoD
 ## License
 
 MIT
+
+## What I Learned
+
+- Full-stack TypeScript development with shared types between the React frontend and Node.js backend, catching contract mismatches at compile time
+- Designing the data flow from raw vehicle telemetry to an AI-powered maintenance alert, and where the model fits vs where deterministic logic is more reliable
+- Working with MongoDB for semi-structured telemetry data and when a document store fits better than a relational schema
