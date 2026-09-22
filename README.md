@@ -5,7 +5,7 @@ A full-stack MVP for managing commercial vehicle fleets with real-time telematic
 
 **Live demo:** https://fleet-frontend-kqhi.onrender.com
 
-> Register a new account from the landing page to try itno invite.
+> Register a new account from the landing page to try
 <img width="1822" height="891" alt="image" src="https://github.com/user-attachments/assets/7f76ef9e-ef72-481b-86a3-d2fc8c6fe1ef" />
 
 
