@@ -3,7 +3,8 @@ import request from 'supertest';
 import { createApp } from '../src/app';
 import { connectDatabase, disconnectDatabase } from '../src/database';
 
-// Requires: MONGODB_URI, JWT_SECRET, CORS_ORIGIN set in env (see CI yml)
+// Requires MONGODB_URI, JWT_SECRET and CORS_ORIGIN in env (see CI yml).
+// The database name is set per Jest worker in tests/setup-env.ts.
 
 const app = createApp();
 
