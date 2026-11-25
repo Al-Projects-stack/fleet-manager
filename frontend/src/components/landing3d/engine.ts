@@ -5,6 +5,7 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { buildTruck, FRONT, WHEEL_R, WHEEL_X } from './buildTruck';
 import { buildWorld, LANE_Z } from './buildWorld';
+import { NO_REFLECT_LAYER } from './optimize';
 import { softSprite } from './textures';
 
 export type Phase = 'Inbound' | 'Braking' | 'Holding' | 'Parked' | 'Departing' | 'Reversing';
@@ -66,17 +67,45 @@ export function createEngine(
   renderer.toneMappingExposure = 1.05;
   renderer.shadowMap.enabled = quality === 'high';
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-  renderer.shadowMap.autoUpdate = false;
-  renderer.shadowMap.needsUpdate = true;
-  const dpr = Math.min(window.devicePixelRatio || 1, quality === 'high' ? 1.75 : 1.25);
+  let dpr = Math.min(window.devicePixelRatio || 1, quality === 'high' ? 1.75 : 1.25);
   renderer.setPixelRatio(dpr);
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 900);
+  camera.layers.enable(NO_REFLECT_LAYER); // the road reflection's own camera leaves this layer out
   const world = buildWorld(scene, renderer, quality);
   const rig = buildTruck();
   rig.root.position.z = LANE_Z;
   scene.add(rig.root);
+
+  // ── shadows ──
+  // The truck is the only thing that moves, so each lamp's shadow map is redrawn
+  // only while the truck is inside that lamp's pool of light (plus one frame after
+  // it leaves, to clear its shadow). Everything else is drawn once.
+  const shadowLights: THREE.SpotLight[] = [];
+  scene.traverse((o) => {
+    const l = o as THREE.SpotLight;
+    if (l.isSpotLight && l.castShadow) {
+      l.shadow.autoUpdate = false;
+      l.shadow.needsUpdate = true;
+      shadowLights.push(l);
+    }
+  });
+  const shadowHad = shadowLights.map(() => true);
+  let shadowDirty = true;
+  function updateShadows() {
+    if (!shadowDirty) return;
+    shadowDirty = false;
+    const x1 = st.x + 1; // truck spans [st.x - FRONT, st.x]
+    const x0 = st.x - FRONT - 1;
+    for (let i = 0; i < shadowLights.length; i++) {
+      const l = shadowLights[i];
+      const reach = l.position.y * Math.tan(l.angle) + 3; // radius of the lit pool on the road
+      const near = x1 > l.position.x - reach && x0 < l.position.x + reach;
+      if (near || shadowHad[i]) l.shadow.needsUpdate = true;
+      shadowHad[i] = near;
+    }
+  }
 
   // ── post ──
   const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: quality === 'high' ? 4 : 0 });
@@ -97,6 +126,11 @@ export function createEngine(
   pGeo.setAttribute('size', new THREE.BufferAttribute(pSize, 1));
   pGeo.setAttribute('alpha', new THREE.BufferAttribute(pAlpha, 1));
   pGeo.setAttribute('color', new THREE.BufferAttribute(pCol, 3));
+  const pAttrs = ['position', 'size', 'alpha', 'color'].map((k) => {
+    const a = pGeo.attributes[k] as THREE.BufferAttribute;
+    a.setUsage(THREE.DynamicDrawUsage);
+    return a;
+  });
   const spriteT = softSprite();
   const pMat = new THREE.ShaderMaterial({
     uniforms: { map: { value: spriteT }, scale: { value: 400 } },
@@ -135,15 +169,45 @@ export function createEngine(
     lift: number;
     c: THREE.Color;
   }
-  const parts: P[] = [];
   const C_SMOKE = new THREE.Color(0.55, 0.58, 0.63);
   const C_SOOT = new THREE.Color(0.12, 0.12, 0.13);
   const C_SPRAY = new THREE.Color(0.62, 0.68, 0.76);
   const C_AIR = new THREE.Color(0.8, 0.84, 0.9);
-  const emit = (o: Partial<P> & { p: THREE.Vector3 }) => {
-    if (parts.length >= MAX_P) return;
-    parts.push({ v: new THREE.Vector3(), size: 0.15, grow: 1, life: 0, max: 2, a: 0.2, drag: 1.5, lift: 0, c: C_SMOKE, ...o });
+  // Fixed pool: particles are recycled, never allocated or spliced per frame,
+  // so the garbage collector has nothing to pause for.
+  const pool: P[] = Array.from({ length: MAX_P }, () => ({
+    p: new THREE.Vector3(),
+    v: new THREE.Vector3(),
+    size: 0,
+    grow: 0,
+    life: 0,
+    max: 1,
+    a: 0,
+    drag: 0,
+    lift: 0,
+    c: C_SMOKE,
+  }));
+  let live = 0;
+  const emit = (
+    px: number, py: number, pz: number,
+    vx: number, vy: number, vz: number,
+    size: number, grow: number, max: number, a: number, drag: number, lift: number, c: THREE.Color,
+  ) => {
+    if (live >= MAX_P) return;
+    const q = pool[live++];
+    q.p.set(px, py, pz);
+    q.v.set(vx, vy, vz);
+    q.size = size;
+    q.grow = grow;
+    q.life = 0;
+    q.max = max;
+    q.a = a;
+    q.drag = drag;
+    q.lift = lift;
+    q.c = c;
   };
+  const SPRAY_X = [...WHEEL_X.trailer, WHEEL_X.drive, WHEEL_X.steer];
+  const AIR_X = [...WHEEL_X.trailer, WHEEL_X.drive];
 
   // ── state ──
   const st = {
@@ -173,7 +237,6 @@ export function createEngine(
     p: 0,
     acc: [0, 0],
     active: true,
-    hudT: 0,
   };
   st.x = st.prevX = st.arrX;
 
@@ -354,7 +417,7 @@ export function createEngine(
     const a = (st.v - vPrev) / Math.max(dt, 1e-4);
     st.a += (a - st.a) * Math.min(1, dt * 12);
     st.wheel -= dx / WHEEL_R;
-    if (Math.abs(dx) > 1e-5 || Math.abs(st.cab.w) > 0.02) renderer.shadowMap.needsUpdate = true;
+    if (Math.abs(dx) > 1e-5 || Math.abs(st.cab.w) > 0.02) shadowDirty = true;
     st.dist += Math.abs(dx);
     st.odo += Math.abs(dx) / 1000;
 
@@ -379,45 +442,35 @@ export function createEngine(
       st.acc[0] += rate * dt;
       while (st.acc[0] >= 1) {
         st.acc[0] -= 1;
-        emit({
-          p: worldExhaust.clone(),
-          v: new THREE.Vector3(-0.4 - Math.random() * 0.5, -0.8 - Math.random() * 0.4, 0.3 + Math.random() * 0.4),
-          size: 0.12,
-          grow: pulling ? 1.6 : 1.0,
-          max: pulling ? 2.2 : 2.8,
-          a: pulling ? 0.42 : 0.14,
-          drag: 2.2,
-          lift: 1.3,
-          c: pulling ? C_SOOT : C_SMOKE,
-        });
+        emit(
+          worldExhaust.x, worldExhaust.y, worldExhaust.z,
+          -0.4 - Math.random() * 0.5, -0.8 - Math.random() * 0.4, 0.3 + Math.random() * 0.4,
+          0.12, pulling ? 1.6 : 1.0, pulling ? 2.2 : 2.8, pulling ? 0.42 : 0.14, 2.2, 1.3, pulling ? C_SOOT : C_SMOKE,
+        );
       }
       if (moving > 1.2) {
         st.acc[1] += moving * 6 * dt;
         while (st.acc[1] >= 1) {
           st.acc[1] -= 1;
-          const xs = [...WHEEL_X.trailer, WHEEL_X.drive, WHEEL_X.steer];
-          const wx = xs[(Math.random() * xs.length) | 0];
+          const wx = SPRAY_X[(Math.random() * SPRAY_X.length) | 0];
           const side = Math.random() < 0.7 ? 1 : -1;
           const dir = Math.sign(st.v) || 1;
-          emit({
-            p: new THREE.Vector3(rig.root.position.x + wx - dir * 0.5, 0.08, LANE_Z + side * 1.1),
-            v: new THREE.Vector3(-dir * moving * (0.08 + Math.random() * 0.15), 0.6 + Math.random() * 1.4, side * (0.2 + Math.random() * 0.5)),
-            size: 0.1,
-            grow: 1.4,
-            max: 0.5 + Math.random() * 0.5,
-            a: 0.16,
-            drag: 2.5,
-            lift: -4,
-            c: C_SPRAY,
-          });
+          emit(
+            rig.root.position.x + wx - dir * 0.5, 0.08, LANE_Z + side * 1.1,
+            -dir * moving * (0.08 + Math.random() * 0.15), 0.6 + Math.random() * 1.4, side * (0.2 + Math.random() * 0.5),
+            0.1, 1.4, 0.5 + Math.random() * 0.5, 0.16, 2.5, -4, C_SPRAY,
+          );
         }
       }
     }
-    for (let i = parts.length - 1; i >= 0; i--) {
-      const q = parts[i];
+    for (let i = live - 1; i >= 0; i--) {
+      const q = pool[i];
       q.life += dt;
       if (q.life >= q.max) {
-        parts.splice(i, 1);
+        // swap the dead particle with the last live one
+        pool[i] = pool[live - 1];
+        pool[live - 1] = q;
+        live--;
         continue;
       }
       const d = Math.exp(-q.drag * dt);
@@ -434,35 +487,40 @@ export function createEngine(
   }
 
   function airBrake() {
-    for (const x of [...WHEEL_X.trailer, WHEEL_X.drive]) {
+    for (const x of AIR_X) {
       for (let i = 0; i < 12; i++) {
         const ang = Math.random() * Math.PI * 2;
         const sp = 1.5 + Math.random() * 3;
-        emit({
-          p: new THREE.Vector3(rig.root.position.x + x, 0.45, LANE_Z + 0.9),
-          v: new THREE.Vector3(Math.cos(ang) * sp, Math.abs(Math.sin(ang)) * sp * 0.4, 0.8 + Math.random() * 1.2),
-          size: 0.2,
-          grow: 2.6,
-          max: 0.9 + Math.random() * 0.5,
-          a: 0.18,
-          drag: 4,
-          lift: 0.4,
-          c: C_AIR,
-        });
+        emit(
+          rig.root.position.x + x, 0.45, LANE_Z + 0.9,
+          Math.cos(ang) * sp, Math.abs(Math.sin(ang)) * sp * 0.4, 0.8 + Math.random() * 1.2,
+          0.2, 2.6, 0.9 + Math.random() * 0.5, 0.18, 4, 0.4, C_AIR,
+        );
       }
     }
   }
 
   // ── apply state to scene ──
   const anchor = new THREE.Vector3();
-  const project = (local: THREE.Vector3) => {
+  const project = (local: THREE.Vector3, out: { x: number; y: number; on: boolean }) => {
     anchor.copy(local).applyMatrix4(rig.root.matrixWorld).project(camera);
-    return { x: ((anchor.x + 1) / 2) * W, y: ((1 - anchor.y) / 2) * H, on: anchor.z < 1 && anchor.z > -1 };
+    out.x = ((anchor.x + 1) / 2) * W;
+    out.y = ((1 - anchor.y) / 2) * H;
+    out.on = anchor.z < 1 && anchor.z > -1;
+  };
+  // One reused frame record: overlays get fresh positions every frame with no allocations.
+  const frame: FrameInfo = {
+    p: 0,
+    kmh: 0,
+    phase: 'Parked',
+    odo: 0,
+    hud: { x: 0, y: 0, on: false },
+    sensors: rig.sensors.map(() => ({ x: 0, y: 0, on: false })),
   };
 
   function apply() {
     rig.root.position.x = st.x - FRONT;
-    for (const w of rig.wheels) w.rotation.z = st.wheel;
+    rig.setWheelAngle(st.wheel);
     const omega = Math.abs(st.v) / WHEEL_R;
     const blur = Math.min(0.92, Math.max(0, (omega - 4) / 18));
     (rig.blurDiscs[0].material as THREE.MeshStandardMaterial).opacity = blur;
@@ -484,9 +542,11 @@ export function createEngine(
     rig.brakeMat.emissiveIntensity = 1.6 + st.brake * 9;
     rig.reverseMat.emissiveIntensity = st.v < -0.2 ? 6 : 0;
 
-    const n = parts.length;
+    const n = live;
+    if (n === 0 && lastLive === 0) return;
+    lastLive = n;
     for (let i = 0; i < n; i++) {
-      const q = parts[i];
+      const q = pool[i];
       const k = q.life / q.max;
       pPos[i * 3] = q.p.x;
       pPos[i * 3 + 1] = q.p.y;
@@ -498,13 +558,17 @@ export function createEngine(
       pCol[i * 3 + 2] = q.c.b;
     }
     pGeo.setDrawRange(0, n);
-    for (const name of ['position', 'size', 'alpha', 'color']) pGeo.attributes[name].needsUpdate = true;
+    // upload only the live slice, not all MAX_P particles
+    for (const attr of pAttrs) {
+      attr.clearUpdateRanges();
+      attr.addUpdateRange(0, Math.max(1, n) * attr.itemSize);
+      attr.needsUpdate = true;
+    }
   }
+  let lastLive = -1;
 
-  function report(dt: number) {
-    st.hudT += dt;
-    if (st.hudT < 0.05) return;
-    st.hudT = 0;
+  // Runs every frame so the DOM overlays stay locked to the 3D scene.
+  function report() {
     const kmh = Math.abs(st.v) * 3.6;
     let phase: Phase = 'Parked';
     if (st.phase === 'wait' || st.phase === 'cruise') phase = 'Inbound';
@@ -512,31 +576,129 @@ export function createEngine(
     else if (st.phase === 'stopped') phase = 'Holding';
     if (st.v > 0.3 && (st.exit > 0.05 || st.click)) phase = 'Departing';
     if (st.v < -0.3) phase = 'Reversing';
-    opts.onFrame({
-      p: st.p,
-      kmh,
-      phase,
-      odo: st.odo,
-      hud: project(rig.hudAnchor),
-      sensors: rig.sensors.map((s) => project(s.pos)),
-    });
+    frame.p = st.p;
+    frame.kmh = kmh;
+    frame.phase = phase;
+    frame.odo = st.odo;
+    project(rig.hudAnchor, frame.hud);
+    for (let i = 0; i < rig.sensors.length; i++) project(rig.sensors[i].pos, frame.sensors[i]);
+    opts.onFrame(frame);
   }
 
-  // ── loop ──
   let raf = 0;
+  let disposed = false;
   let last = performance.now();
+
+  // ── adaptive resolution ──
+  // Sustained slow frames step the render resolution down; sustained fast frames
+  // step it back up (never above the starting cap). MSAA goes last.
+  const dprMax = dpr;
+  const DPR_MIN = Math.min(dprMax, 0.6);
+  const ad = { n: 0, sum: 0, bad: 0, good: 0, best: 1000 };
+  function adapt(ms: number) {
+    if (ms > 120) return; // tab switch or one-off stall, not load
+    ad.best = Math.min(ad.best, ms);
+    ad.n++;
+    ad.sum += ms;
+    if (ad.n < 45) return;
+    const avg = ad.sum / ad.n;
+    ad.n = ad.sum = 0;
+    const slow = avg > 20; // under ~50 fps
+    const fast = avg < Math.min(17.5, ad.best * 1.2);
+    ad.bad = slow ? ad.bad + 1 : 0;
+    ad.good = fast ? ad.good + 1 : 0;
+    if (ad.bad >= 2) {
+      ad.bad = 0;
+      if (dpr > DPR_MIN + 0.01) setDpr(Math.max(DPR_MIN, dpr * 0.8));
+      else if (composer.renderTarget1.samples > 0) setSamples(0);
+    } else if (ad.good >= 8 && dpr < dprMax - 0.01) {
+      ad.good = 0;
+      setDpr(Math.min(dprMax, dpr / 0.9));
+    }
+  }
+  function setDpr(d: number) {
+    dpr = d;
+    renderer.setPixelRatio(d);
+    resize();
+  }
+  function setSamples(s: number) {
+    for (const t of [composer.renderTarget1, composer.renderTarget2]) {
+      t.samples = s;
+      t.dispose();
+    }
+  }
+
+  // ── warm-up ──
+  // Compile every shader off the main thread (KHR_parallel_shader_compile) and
+  // upload textures a few per frame, so the page never freezes and the truck's
+  // arrival doesn't start until the scene can actually render smoothly.
+  let ready = false;
+  const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
+  (async () => {
+    resize(); // builds the camera keys the warm-up frame needs
+    placeCamera();
+    try {
+      // Compile against the composer's target: shader variants depend on whether the
+      // output is the linear HDR buffer or the screen, and only the former is used.
+      const prev = renderer.getRenderTarget();
+      renderer.setRenderTarget(composer.readBuffer);
+      const jobs = [renderer.compileAsync(scene, camera)];
+      // The bloom pass's own shaders (threshold, five blur kernels, composite)
+      // would otherwise compile synchronously on the first frame.
+      const post = new THREE.Scene();
+      const quad = new THREE.PlaneGeometry(2, 2);
+      for (const v of Object.values(bloom)) {
+        for (const m of Array.isArray(v) ? v : [v]) {
+          if (m && (m as THREE.Material).isMaterial) post.add(new THREE.Mesh(quad, m as THREE.Material));
+        }
+      }
+      jobs.push(renderer.compileAsync(post, camera));
+      renderer.setRenderTarget(prev);
+      await Promise.all(jobs);
+      quad.dispose();
+    } catch {
+      /* fall back to compiling on first render */
+    }
+    const textures = new Set<THREE.Texture>();
+    scene.traverse((o) => {
+      const mats = (o as THREE.Mesh).material;
+      for (const m of Array.isArray(mats) ? mats : mats ? [mats] : []) {
+        for (const v of Object.values(m)) if (v && (v as THREE.Texture).isTexture) textures.add(v as THREE.Texture);
+      }
+    });
+    // Upload (and mipmap) on a time budget so no single frame stalls on a big texture.
+    let t0 = performance.now();
+    for (const t of textures) {
+      if (disposed) return;
+      renderer.initTexture(t);
+      if (performance.now() - t0 > 8) {
+        await nextFrame();
+        t0 = performance.now();
+      }
+    }
+    if (disposed) return;
+    composer.render(0); // draws the shadow maps and compiles the last few programs (shadow depth, output)
+    await nextFrame();
+    ready = true;
+    last = performance.now();
+  })();
+
+  // ── loop ──
   const loop = (now: number) => {
     raf = requestAnimationFrame(loop);
-    const dt = Math.min((now - last) / 1000, 0.5);
+    const ms = now - last;
+    const dt = Math.min(ms / 1000, 0.5);
     last = now;
-    if (!st.active) return;
+    if (!st.active || !ready) return;
+    adapt(ms);
     // fixed sub-steps keep the physics real-time even when the frame rate drops
     for (let left = dt; left > 1e-6; left -= 1 / 60) step(Math.min(left, 1 / 60));
     apply();
     world.update(st.t, dt, tmpV.set(camera.position.x, 0, 0));
     placeCamera();
+    updateShadows();
     composer.render(dt);
-    report(dt);
+    report();
   };
 
   const ro = new ResizeObserver(resize);
@@ -567,6 +729,7 @@ export function createEngine(
       st.click = true;
     },
     dispose() {
+      disposed = true;
       cancelAnimationFrame(raf);
       ro.disconnect();
       world.dispose();

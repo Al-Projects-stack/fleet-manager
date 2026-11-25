@@ -79,78 +79,116 @@ export const Hero3D = forwardRef<Hero3DHandle, Props>(function Hero3D({ nav, int
     const coarse = window.matchMedia('(pointer: coarse)').matches;
     const quality = coarse || window.innerWidth < 900 ? 'low' : 'high';
 
+    // Layout numbers are read on resize only. Reading them inside the frame
+    // callback, right after style writes, would force a synchronous layout every frame.
+    const lay = { cw: 1, ch: 1, cardBottom: 0, top: 0, range: 1 };
+    // Style writes are skipped when the value hasn't changed.
+    const cache = new Map<Element, Record<string, string>>();
+    const css = (el: HTMLElement | SVGElement, prop: string, v: string) => {
+      let c = cache.get(el);
+      if (!c) cache.set(el, (c = {}));
+      if (c[prop] === v) return;
+      c[prop] = v;
+      if (prop === 'points') el.setAttribute('points', v);
+      else el.style.setProperty(prop, v);
+    };
+    const set = (el: HTMLElement | SVGElement | null, o: number, tf?: string) => {
+      if (!el) return;
+      const on = o >= 0.01;
+      css(el, 'opacity', on ? o.toFixed(3) : '0');
+      css(el, 'visibility', on ? 'visible' : 'hidden');
+      if (on && tf) css(el, 'transform', tf); // hidden elements aren't moved at all
+    };
+    const order: number[] = SENSORS.map((_, i) => i);
+    const rowOf: number[] = SENSORS.map(() => -1);
+    let shown = false;
+
     const onFrame = (f: FrameInfo) => {
       const p = f.p;
-      const set = (el: HTMLElement | null, o: number, extra = '') => {
-        if (!el) return;
-        el.style.opacity = o.toFixed(3);
-        el.style.visibility = o < 0.01 ? 'hidden' : 'visible';
-        if (extra) el.style.transform = extra;
-      };
+      if (!shown) {
+        shown = true;
+        canvas.style.opacity = '1';
+      }
       const io = 1 - sm(0.015, 0.09, p);
-      set(introRef.current, io, `translate3d(0, ${(-40 * (1 - io)).toFixed(1)}px, 0)`);
+      set(introRef.current, io, `translate3d(0,${(-40 * (1 - io)).toFixed(1)}px,0)`);
       set(hintRef.current, 1 - sm(0.005, 0.03, p));
-      STAGES.forEach((s, i) => {
-        const o = bump(p, s.at, 0.13);
-        set(stageRefs.current[i], o, `translate3d(0, ${(24 * (1 - o)).toFixed(1)}px, 0)`);
-      });
+      for (let i = 0; i < STAGES.length; i++) {
+        const o = bump(p, STAGES[i].at, 0.13);
+        set(stageRefs.current[i], o, `translate3d(0,${(24 * (1 - o)).toFixed(1)}px,0)`);
+      }
       const fo = sm(0.9, 0.975, p);
-      set(finaleRef.current, fo, `translate3d(0, ${(24 * (1 - fo)).toFixed(1)}px, 0)`);
+      set(finaleRef.current, fo, `translate3d(0,${(24 * (1 - fo)).toFixed(1)}px,0)`);
 
       // Sensor read-outs: dots stay on the truck, labels line up in one column to
       // the right, ordered top to bottom by their dot so leader lines never cross.
       const so = bump(p, 2 / 3, 0.11);
-      const CW = canvas.clientWidth;
-      const CH = canvas.clientHeight;
-      const narrow = CW < 640;
-      const cardW = narrow ? 128 : 168;
-      const rowH = narrow ? 44 : 50;
-      const colX = CW - (narrow ? 12 : Math.max(28, CW * 0.05)) - cardW;
-      const order = f.sensors
-        .map((s, i) => ({ ...s, i }))
-        .filter((s) => s.on)
-        .sort((a, b) => a.y - b.y);
-      const total = order.length * rowH;
-      const meanY = order.reduce((acc, s) => acc + s.y, 0) / Math.max(1, order.length);
-      const card = stageRefs.current[1];
-      const minTop = narrow && card ? card.offsetTop + card.offsetHeight + 16 : 92;
-      const maxTop = narrow ? CH - 16 - total : Math.min(CH - 16 - total, CH * 0.62 - total / 2);
-      const top = Math.max(minTop, Math.min(maxTop, meanY - total / 2));
-      const row = new Map(order.map((s, k) => [s.i, k]));
-      f.sensors.forEach((s, i) => {
-        const k = row.get(i);
-        const dot = dotRefs.current[i];
-        const line = lineRefs.current[i];
-        const cardEl = cardRefs.current[i];
-        // stagger: each row arrives a beat after the one above
-        const o = k === undefined ? 0 : Math.min(1, Math.max(0, so * 1.5 - k * 0.08));
-        if (dot) {
-          dot.style.transform = `translate3d(${s.x.toFixed(1)}px, ${s.y.toFixed(1)}px, 0)`;
-          set(dot, o);
+      const s = f.sensors;
+      if (so > 0) {
+        const CW = lay.cw;
+        const CH = lay.ch;
+        const narrow = CW < 640;
+        const cardW = narrow ? 128 : 168;
+        const rowH = narrow ? 44 : 50;
+        const colX = CW - (narrow ? 12 : Math.max(28, CW * 0.05)) - cardW;
+        // allocation-free insertion sort of the visible dots by screen y
+        let n = 0;
+        let sumY = 0;
+        for (let i = 0; i < s.length; i++) {
+          rowOf[i] = -1;
+          if (!s[i].on) continue;
+          let j = n++;
+          while (j > 0 && s[order[j - 1]].y > s[i].y) {
+            order[j] = order[j - 1];
+            j--;
+          }
+          order[j] = i;
+          sumY += s[i].y;
         }
-        const ry = top + (k ?? 0) * rowH + rowH / 2 - 4;
-        if (cardEl) {
-          cardEl.style.width = `${cardW}px`;
-          set(cardEl, o, `translate3d(${(colX + 12 * (1 - o)).toFixed(1)}px, ${(ry - 19).toFixed(1)}px, 0)`);
+        for (let k = 0; k < n; k++) rowOf[order[k]] = k;
+        const total = n * rowH;
+        const minTop = narrow ? lay.cardBottom + 16 : 92;
+        const maxTop = narrow ? CH - 16 - total : Math.min(CH - 16 - total, CH * 0.62 - total / 2);
+        const top = Math.max(minTop, Math.min(maxTop, sumY / Math.max(1, n) - total / 2));
+        for (let i = 0; i < s.length; i++) {
+          const k = rowOf[i];
+          // stagger: each row arrives a beat after the one above
+          const o = k < 0 ? 0 : Math.min(1, Math.max(0, so * 1.5 - k * 0.08));
+          const ry = top + Math.max(0, k) * rowH + rowH / 2 - 4;
+          set(dotRefs.current[i], o, `translate3d(${s[i].x.toFixed(1)}px,${s[i].y.toFixed(1)}px,0)`);
+          const cardEl = cardRefs.current[i];
+          if (cardEl) css(cardEl, 'width', `${cardW}px`);
+          set(cardEl, o, `translate3d(${(colX + 12 * (1 - o)).toFixed(1)}px,${(ry - 19).toFixed(1)}px,0)`);
+          const line = lineRefs.current[i];
+          if (line) {
+            css(line, 'opacity', (o * 0.7).toFixed(3));
+            if (o > 0) {
+              const elbow = Math.max(s[i].x, colX - 36);
+              css(line, 'points', `${s[i].x.toFixed(1)},${s[i].y.toFixed(1)} ${elbow.toFixed(1)},${ry.toFixed(1)} ${colX.toFixed(1)},${ry.toFixed(1)}`);
+            }
+          }
         }
-        if (line) {
-          const elbow = Math.max(s.x, colX - 36);
-          line.setAttribute('points', `${s.x.toFixed(1)},${s.y.toFixed(1)} ${elbow.toFixed(1)},${ry.toFixed(1)} ${colX.toFixed(1)},${ry.toFixed(1)}`);
-          line.style.opacity = (o * 0.7).toFixed(3);
+      } else {
+        for (let i = 0; i < s.length; i++) {
+          set(dotRefs.current[i], 0);
+          set(cardRefs.current[i], 0);
+          const line = lineRefs.current[i];
+          if (line) css(line, 'opacity', '0');
         }
-      });
-
-      const W = canvas.clientWidth;
-      const h = hudRef.current;
-      if (h) {
-        h.style.transform = `translate3d(${f.hud.x.toFixed(1)}px, ${f.hud.y.toFixed(1)}px, 0)`;
-        const show = W >= 1024 && f.hud.on && f.hud.y > 230 && f.hud.x > W * 0.5 && f.hud.x < W - 60;
-        set(h, show ? 1 - sm(0.01, 0.05, p) : 0);
       }
-      if (hud.speed.current) hud.speed.current.textContent = f.kmh.toFixed(0);
-      if (hud.status.current) hud.status.current.textContent = f.phase;
-      if (hud.odo.current)
-        hud.odo.current.textContent = f.odo.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+
+      const W = lay.cw;
+      const h = hudRef.current;
+      const show = W >= 1024 && f.hud.on && f.hud.y > 230 && f.hud.x > W * 0.5 && f.hud.x < W - 60;
+      set(h, show ? 1 - sm(0.01, 0.05, p) : 0, `translate3d(${f.hud.x.toFixed(1)}px,${f.hud.y.toFixed(1)}px,0)`);
+      if (show) {
+        // text only changes when the shown value does
+        const txt = (el: HTMLElement | null, v: string) => {
+          if (el && el.textContent !== v) el.textContent = v;
+        };
+        txt(hud.speed.current, f.kmh.toFixed(0));
+        txt(hud.status.current, f.phase);
+        txt(hud.odo.current, f.odo.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 }));
+      }
     };
 
     let engine: Engine;
@@ -162,30 +200,41 @@ export const Hero3D = forwardRef<Hero3DHandle, Props>(function Hero3D({ nav, int
     engineRef.current = engine;
 
     const intro = introRef.current;
+    const onScroll = () => {
+      engine.setProgress(Math.min(1, Math.max(0, (window.scrollY - lay.top) / lay.range)));
+    };
     const measure = () => {
+      lay.cw = canvas.clientWidth || 1;
+      lay.ch = canvas.clientHeight || 1;
+      const card = stageRefs.current[1];
+      lay.cardBottom = card ? card.offsetTop + card.offsetHeight : 0;
+      lay.top = section.getBoundingClientRect().top + window.scrollY;
+      lay.range = Math.max(1, section.offsetHeight - window.innerHeight);
       if (intro) engine.setClearance(intro.offsetTop + intro.offsetHeight);
+      onScroll();
     };
     measure();
     const ro = new ResizeObserver(measure);
     if (intro) ro.observe(intro);
     ro.observe(canvas);
+    ro.observe(section);
 
-    const onScroll = () => {
-      const r = section.getBoundingClientRect();
-      const range = r.height - window.innerHeight;
-      engine.setProgress(range > 0 ? -r.top / range : 0);
-    };
-    onScroll();
     window.addEventListener('scroll', onScroll, { passive: true });
-    window.addEventListener('resize', onScroll);
-    const io = new IntersectionObserver(([e]) => engine.setActive(e.isIntersecting));
+    window.addEventListener('resize', measure);
+    // Render only while the hero is on screen and the tab is visible.
+    let onScreen = true;
+    const sync = () => engine.setActive(onScreen && !document.hidden);
+    const io = new IntersectionObserver(([e]) => {
+      onScreen = e.isIntersecting;
+      sync();
+    });
     io.observe(section);
-    const onVis = () => engine.setActive(!document.hidden);
+    const onVis = sync;
     document.addEventListener('visibilitychange', onVis);
 
     return () => {
       window.removeEventListener('scroll', onScroll);
-      window.removeEventListener('resize', onScroll);
+      window.removeEventListener('resize', measure);
       document.removeEventListener('visibilitychange', onVis);
       io.disconnect();
       ro.disconnect();
@@ -198,7 +247,11 @@ export const Hero3D = forwardRef<Hero3DHandle, Props>(function Hero3D({ nav, int
   return (
     <section ref={sectionRef} className="relative" style={{ height: '420vh' }}>
       <div className="sticky top-0 h-[100svh] overflow-hidden" style={{ background: '#03060c' }}>
-        <canvas ref={canvasRef} className="absolute inset-0 w-full h-full block" />
+        <canvas
+          ref={canvasRef}
+          className="absolute inset-0 w-full h-full block"
+          style={{ opacity: 0, transition: 'opacity 0.6s ease-out' }}
+        />
 
         <div
           className="absolute inset-0 pointer-events-none"

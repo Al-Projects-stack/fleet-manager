@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { Reflector } from 'three/examples/jsm/objects/Reflector.js';
+import { freeze, mergeStatic, skipFlatInReflection } from './optimize';
 import {
   doorTexture,
   neonTexture,
@@ -357,58 +358,70 @@ export function buildWorld(scene: THREE.Scene, renderer: THREE.WebGLRenderer, qu
   add(moon);
 
   // ── rain ──
+  // Animated entirely in the vertex shader: the CPU never touches the drops and
+  // nothing is re-uploaded per frame.
   const N = quality === 'high' ? 1500 : 700;
-  const rainPos = new Float32Array(N * 6);
-  const rainData = new Float32Array(N * 4); // x, y, z, speed
   const box = { x: 30, y: 16, z0: -12, z1: 11 };
+  const seed = new Float32Array(N * 2 * 4); // x0, y phase, z, speed (same for both ends)
+  const end = new Float32Array(N * 2); // 0 = head, 1 = tail
   for (let i = 0; i < N; i++) {
-    rainData[i * 4] = (Math.random() - 0.5) * 2 * box.x;
-    rainData[i * 4 + 1] = Math.random() * box.y;
-    rainData[i * 4 + 2] = box.z0 + Math.random() * (box.z1 - box.z0);
-    rainData[i * 4 + 3] = 9 + Math.random() * 4;
+    const x0 = (Math.random() - 0.5) * 2 * box.x;
+    const y0 = Math.random() * box.y;
+    const z = box.z0 + Math.random() * (box.z1 - box.z0);
+    const sp = 9 + Math.random() * 4;
+    for (let e = 0; e < 2; e++) {
+      seed.set([x0, y0, z, sp], (i * 2 + e) * 4);
+      end[i * 2 + e] = e;
+    }
   }
   const rainGeo = keep(new THREE.BufferGeometry());
-  rainGeo.setAttribute('position', new THREE.BufferAttribute(rainPos, 3));
-  const rain = new THREE.LineSegments(
-    rainGeo,
-    keep(new THREE.LineBasicMaterial({ color: 0xa9bfd9, transparent: true, opacity: 0.2, depthWrite: false })),
-  );
+  rainGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * 2 * 3), 3));
+  rainGeo.setAttribute('aSeed', new THREE.BufferAttribute(seed, 4));
+  rainGeo.setAttribute('aEnd', new THREE.BufferAttribute(end, 1));
+  const rainU = { uTime: { value: 0 }, uFocusX: { value: 0 } };
+  const rainMat = keep(new THREE.LineBasicMaterial({ color: 0xa9bfd9, transparent: true, opacity: 0.2, depthWrite: false }));
+  rainMat.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, rainU);
+    sh.vertexShader = sh.vertexShader
+      .replace(
+        '#include <common>',
+        '#include <common>\nuniform float uTime;\nuniform float uFocusX;\nattribute vec4 aSeed;\nattribute float aEnd;',
+      )
+      .replace(
+        '#include <begin_vertex>',
+        `const float WIND = -1.6;
+        const float BX = ${box.x.toFixed(1)};
+        const float BY = ${box.y.toFixed(1)};
+        float sp = aSeed.w;
+        float y = BY - mod(BY - aSeed.y + sp * uTime, BY);
+        float x = aSeed.x + WIND * uTime;
+        x = uFocusX + mod(x - uFocusX + 3.0 * BX, 2.0 * BX) - BX;
+        vec3 transformed = vec3(x - aEnd * (WIND / sp) * 0.38, y + aEnd * 0.38, aSeed.z);`,
+      );
+  };
+  const rain = new THREE.LineSegments(rainGeo, rainMat);
   rain.frustumCulled = false;
   add(rain);
 
   const neon = scene.getObjectByName('neon') as THREE.Mesh;
   const neonMat = neon.material as THREE.MeshStandardMaterial;
 
+  // ~90 small static meshes collapse to one per material, then the whole world is
+  // frozen so the per-frame scene graph update skips it.
+  skipFlatInReflection(scene);
+  mergeStatic(scene);
+  freeze([...scene.children]);
+
   return {
     reflector,
     rain,
-    update(t, dt, focus) {
+    update(t, _dt, focus) {
       // neon flicker (two short dips every 6 s)
       const ph = t % 6;
       neonMat.emissiveIntensity = (ph > 1.2 && ph < 1.32) || (ph > 3.8 && ph < 3.86) ? 1.1 : 3;
-
-      const wind = -1.6;
-      for (let i = 0; i < N; i++) {
-        const k = i * 4;
-        const sp = rainData[k + 3];
-        rainData[k] += wind * dt;
-        rainData[k + 1] -= sp * dt;
-        if (rainData[k + 1] < 0) {
-          rainData[k] = (Math.random() - 0.5) * 2 * box.x;
-          rainData[k + 1] = box.y;
-        }
-        const x = focus.x + ((((rainData[k] - focus.x) % (2 * box.x)) + 3 * box.x) % (2 * box.x)) - box.x;
-        const y = rainData[k + 1];
-        const z = rainData[k + 2];
-        const j = i * 6;
-        rainPos[j] = x;
-        rainPos[j + 1] = y;
-        rainPos[j + 2] = z;
-        rainPos[j + 3] = x - (wind / sp) * 0.38;
-        rainPos[j + 4] = y + 0.38;
-        rainPos[j + 5] = z;
-      }
-      rainGeo.attributes.position.needsUpdate = true;
+      // wrapped so float precision holds on long sessions
+      rainU.uTime.value = t % 600;
+      rainU.uFocusX.value = focus.x;
     },
     resize(w, h) {
       const q = quality === 'high' ? 0.4 : 0.25;
