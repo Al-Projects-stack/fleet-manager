@@ -28,8 +28,10 @@ npm run dev
 cd backend
 npm install
 
-# Set minimal test env
-export MONGODB_URI=mongodb://localhost:27017/fleet_test
+# Set minimal test env.
+# Tests use their own databases (fleet_test_1, fleet_test_2, ...) and drop them
+# when they finish; the database name in the URI is ignored.
+export MONGODB_URI=mongodb://localhost:27017
 export JWT_SECRET=test_secret_that_is_at_least_32_characters
 export CORS_ORIGIN=http://localhost:5173
 export NODE_ENV=test

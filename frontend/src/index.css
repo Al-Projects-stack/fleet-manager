@@ -1,3 +1,25 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@keyframes fm-blink {
+  0%, 46% { opacity: 1; }
+  50%, 96% { opacity: 0.08; }
+  100% { opacity: 1; }
+}
+.fm-blink { animation: fm-blink 2.4s infinite; }
+
+@keyframes fm-neon {
+  0%, 18%, 22%, 62%, 64%, 100% { opacity: 1; }
+  20%, 63% { opacity: 0.45; }
+}
+.fm-neon { animation: fm-neon 6s infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .fm-blink, .fm-neon { animation: none; }
+}
+
+@keyframes fm-scrollhint {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(300%); }
+}

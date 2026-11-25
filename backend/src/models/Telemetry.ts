@@ -82,6 +82,9 @@ const telemetrySchema = new Schema<ITelemetryDocument>(
   {
     collection: 'telemetries',
     autoCreate: false, // Mongoose must NOT create this collection — database.ts does it as time-series
+    // Building an index on a missing collection creates it as a regular one, so
+    // indexes are built by database.ts after the time-series collection exists.
+    autoIndex: false,
   }
 );
 
