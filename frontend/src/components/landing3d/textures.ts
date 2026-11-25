@@ -4,11 +4,12 @@ import * as THREE from 'three';
 
 const FONT = "'Space Grotesk', 'Inter', system-ui, sans-serif";
 
-function canvas(w: number, h: number) {
+/** `read`: the canvas gets pixel noise, so keep it CPU-side and the readback is free. */
+function canvas(w: number, h: number, read = false) {
   const c = document.createElement('canvas');
   c.width = w;
   c.height = h;
-  return [c, c.getContext('2d')!] as const;
+  return [c, c.getContext('2d', { willReadFrequently: read })!] as const;
 }
 
 function tex(c: HTMLCanvasElement, srgb = true) {
@@ -31,12 +32,18 @@ function rng(seed: number) {
 
 function noise(g: CanvasRenderingContext2D, w: number, h: number, amount: number, seed: number) {
   const img = g.getImageData(0, 0, w, h);
-  const r = rng(seed);
-  for (let i = 0; i < img.data.length; i += 4) {
-    const n = (r() - 0.5) * amount;
-    img.data[i] += n;
-    img.data[i + 1] += n;
-    img.data[i + 2] += n;
+  const d = img.data;
+  // inlined xorshift32: this loop touches every pixel, so no closure call per pixel
+  let x = (seed * 2654435761) | 0 || 1;
+  const k = amount / 4294967296;
+  for (let i = 0; i < d.length; i += 4) {
+    x ^= x << 13;
+    x ^= x >>> 17;
+    x ^= x << 5;
+    const n = x * k; // x is a signed int32, so n spans ±amount/2
+    d[i] += n;
+    d[i + 1] += n;
+    d[i + 2] += n;
   }
   g.putImageData(img, 0, 0);
 }
@@ -50,16 +57,21 @@ export function roadTextures() {
   const W = 1024;
   const H = 614;
   const zToV = (z: number) => ((z + 7.6) / 12) * H;
-  const [c, g] = canvas(W, H);
+  const [c, g] = canvas(W, H, true);
   g.fillStyle = '#26292e';
   g.fillRect(0, 0, W, H);
   noise(g, W, H, 38, 11);
   const r = rng(5);
-  // aggregate speckle
+  // aggregate speckle: two batched paths instead of 9000 separate fills
+  const light = new Path2D();
+  const dark = new Path2D();
   for (let i = 0; i < 9000; i++) {
-    g.fillStyle = r() < 0.5 ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.12)';
-    g.fillRect(r() * W, r() * H, 1 + r() * 1.5, 1 + r() * 1.5);
+    (r() < 0.5 ? light : dark).rect(r() * W, r() * H, 1 + r() * 1.5, 1 + r() * 1.5);
   }
+  g.fillStyle = 'rgba(255,255,255,0.05)';
+  g.fill(light);
+  g.fillStyle = 'rgba(0,0,0,0.12)';
+  g.fill(dark);
   // patched repairs and cracks
   for (let i = 0; i < 4; i++) {
     g.fillStyle = 'rgba(10,11,13,0.35)';
@@ -138,7 +150,7 @@ export function roadTextures() {
 }
 
 export function sidewalkTexture() {
-  const [c, g] = canvas(512, 256);
+  const [c, g] = canvas(512, 256, true);
   g.fillStyle = '#3a3e45';
   g.fillRect(0, 0, 512, 256);
   noise(g, 512, 256, 40, 21);
@@ -162,13 +174,18 @@ export function trailerSideTexture() {
   const W = 2720;
   const H = 550;
   const [c, g] = canvas(W, H);
-  const base = g.createLinearGradient(0, 0, 0, H);
+  // Panel base with faint grain, made on a quarter-width CPU tile and repeated:
+  // the grain is too faint to show the repeat, and the big canvas never reads back.
+  const TW = W / 4;
+  const [b, gb] = canvas(TW, H, true);
+  const base = gb.createLinearGradient(0, 0, 0, H);
   base.addColorStop(0, '#f2f4f7');
   base.addColorStop(0.5, '#e3e7ec');
   base.addColorStop(1, '#c9cfd7');
-  g.fillStyle = base;
-  g.fillRect(0, 0, W, H);
-  noise(g, W, H, 6, 31);
+  gb.fillStyle = base;
+  gb.fillRect(0, 0, TW, H);
+  noise(gb, TW, H, 6, 31);
+  for (let x = 0; x < W; x += TW) g.drawImage(b, x, 0);
   // ribs
   for (let x = 40; x < W; x += 80) {
     g.fillStyle = 'rgba(0,0,0,0.07)';
@@ -227,7 +244,7 @@ export function trailerSideTexture() {
 export function trailerRearTexture() {
   const W = 510;
   const H = 550;
-  const [c, g] = canvas(W, H);
+  const [c, g] = canvas(W, H, true);
   g.fillStyle = '#d9dee4';
   g.fillRect(0, 0, W, H);
   noise(g, W, H, 8, 41);
@@ -344,7 +361,7 @@ export function grilleTexture() {
 }
 
 export function treadTexture() {
-  const [c, g] = canvas(1024, 64);
+  const [c, g] = canvas(1024, 64, true);
   g.fillStyle = '#1b1c1f';
   g.fillRect(0, 0, 1024, 64);
   g.fillStyle = '#0b0b0c';

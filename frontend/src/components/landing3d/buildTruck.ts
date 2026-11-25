@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { mergeStatic, shadowTwin } from './optimize';
 import {
   cabSideTexture,
   grilleTexture,
@@ -33,7 +34,8 @@ export interface TruckRig {
   trailerPivot: THREE.Group;
   chassisPivot: THREE.Group;
   cabPivot: THREE.Group;
-  wheels: THREE.Group[];
+  /** Spins every wheel to `angle` (radians about the axle). */
+  setWheelAngle: (angle: number) => void;
   blurDiscs: THREE.Mesh[];
   sharpDiscs: THREE.Mesh[];
   brakeMat: THREE.MeshStandardMaterial;
@@ -61,6 +63,49 @@ function cyl(r: number, len: number, mat: THREE.Material, axis: 'x' | 'y' | 'z',
   const m = new THREE.Mesh(geo, mat);
   m.castShadow = true;
   return m;
+}
+
+/**
+ * The three trailer axles are identical, so after merging they become one
+ * InstancedMesh per material (3 instances) instead of three separate sets.
+ * Returns the per-frame wheel spinner for all axles.
+ */
+function instanceTrailerAxles(root: THREE.Group, wheels: THREE.Group[]) {
+  const trailer = wheels.slice(0, WHEEL_X.trailer.length);
+  const others = wheels.slice(WHEEL_X.trailer.length);
+  const xs = trailer.map((w) => w.position.x);
+  const inst: THREE.InstancedMesh[] = [];
+  const ref = trailer[0];
+  ref.updateMatrixWorld(true);
+  const toAxle = new THREE.Matrix4().copy(ref.matrixWorld).invert();
+  const local = new THREE.Matrix4();
+  ref.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    const geo = m.geometry.clone().applyMatrix4(local.multiplyMatrices(toAxle, m.matrixWorld));
+    const im = new THREE.InstancedMesh(geo, m.material, xs.length);
+    im.castShadow = m.castShadow;
+    im.receiveShadow = m.receiveShadow;
+    inst.push(im);
+  });
+  inst.forEach((im) => root.add(im));
+  trailer.forEach((w) => w.removeFromParent());
+
+  const mat = new THREE.Matrix4();
+  let last = NaN;
+  const set = (angle: number) => {
+    if (angle === last) return;
+    last = angle;
+    for (const w of others) w.rotation.z = angle;
+    for (let i = 0; i < xs.length; i++) {
+      mat.makeRotationZ(angle).setPosition(xs[i], WHEEL_R, 0);
+      for (const im of inst) im.setMatrixAt(i, mat);
+    }
+    for (const im of inst) im.instanceMatrix.needsUpdate = true;
+  };
+  set(0);
+  inst.forEach((im) => im.computeBoundingSphere());
+  return set;
 }
 
 /** Pivot group at `p`, with a child group offset back so children use truck-local coords. */
@@ -496,12 +541,26 @@ export function buildTruck(): TruckRig {
     }
   });
 
+  // ── draw-call diet: ~210 meshes become a few dozen ──
+  // Each rigid part (trailer, chassis, cab) collapses to one mesh per material.
+  mergeStatic(T);
+  mergeStatic(K);
+  mergeStatic(C, (o) => o === cabPivot);
+  mergeStatic(root, (o) => o === trailerPivot || o === chassisPivot || wheels.includes(o as THREE.Group));
+  wheels.forEach((w) => mergeStatic(w));
+  const setWheelAngle = instanceTrailerAxles(root, wheels);
+  // Shadow maps then draw one depth-only twin per moving part instead of every material.
+  shadowTwin(T);
+  shadowTwin(K);
+  shadowTwin(C, (o) => o === cabPivot);
+  shadowTwin(root, (o) => o === trailerPivot || o === chassisPivot);
+
   return {
     root,
     trailerPivot,
     chassisPivot,
     cabPivot,
-    wheels,
+    setWheelAngle,
     blurDiscs,
     sharpDiscs,
     brakeMat,
